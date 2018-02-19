@@ -5,83 +5,72 @@ import json
 import vk_login
 
 
-def list2str(arr, start_pos=0, end_pos=0):
-    result = ''
-    sp = start_pos if start_pos else 1
-    ep = end_pos if end_pos else len(arr)
-    i = sp - 1
-    while i < ep:
-        result += str(arr[i]) + ','
-        i += 1
-    result = result[:-1]
-    return result
-
-
 class VKInterface:
 
     error = False
     error_msg = ''
-    request_count = 0
 
     def __init__(self, user_id, access_token):
         self.user_id = user_id
         self.access_token = access_token
 
-    def get_request(self, url, params):
+    def get_request(self, url, params=None):
 
         result = []
 
-        # Ждем секунду и в это время выводим мигающую точку
-        if self.request_count == 3:
-            for i in range(5):
-                sys.stderr.write('\r*')
-                time.sleep(0.1)
-                sys.stderr.write("\r")
-                time.sleep(0.1)
-            self.request_count = 0
+        request_params = {
+            'access_token': self.access_token,
+            'user_id': self.user_id}
+        if params:
+            request_params.update(params)
 
-        response = requests.get(url, params)
+        while True:
 
-        if response.ok:
-            response_json = response.json()
-            if response_json.get('error'):
-                self.error = True
-                self.error_msg = response_json['error']['error_msg']
+            too_many_requests = False
+            self.error = False
+            self.error_msg = ''
+
+            response = requests.get(url, request_params)
+
+            if response.ok:
+                response_json = response.json()
+                if response_json.get('error'):
+                    self.error = True
+                    self.error_msg = response_json['error']['error_msg']
+                    too_many_requests = (int(response_json['error']['error_code']) == 6)
+                else:
+                    result = response_json['response']
             else:
-                result = response_json['response']
-        else:
-            self.error = True
-            self.error_msg = response.content
+                self.error = True
+                self.error_msg = response.content
+
+            if too_many_requests:
+                # Ждем секунду и в это время выводим мигающую точку
+                for i in range(5):
+                    sys.stderr.write('\r*')
+                    time.sleep(0.1)
+                    sys.stderr.write('\r')
+                    time.sleep(0.1)
+            else:
+                break
 
         return result
 
-    def init_request_param(self):
-        params = {
-            'access_token': self.access_token,
-            'user_id': self.user_id}
-        self.error = False
-        self.error_msg = ''
-        self.request_count += 1
-        return params
-
     def get_friends_list(self):
-        params = self.init_request_param()
-        return self.get_request('https://api.vk.com/method/friends.get', params)
+        return self.get_request('https://api.vk.com/method/friends.get')
 
     def get_groups_list(self):
-        params = self.init_request_param()
+        params = {
+            'extended': 1,
+            'fields': 'members_count'
+        }
         return self.get_request('https://api.vk.com/method/groups.get', params)
 
-    def get_groups_details(self, group_id):
-        params = self.init_request_param()
-        params['group_id'] = group_id
-        params['fields'] = 'members_count'
-        return self.get_request('https://api.vk.com/method/groups.getById', params)
-
-    def get_members_of_group(self, group_id, user_ids):
-        params = self.init_request_param()
-        params['user_ids'] = user_ids
-        params['group_id'] = group_id
+    def check_members_of_group(self, group_id, user_ids):
+        params = {
+            'user_ids': user_ids,
+            'group_id': group_id
+        }
         return self.get_request('https://api.vk.com/method/groups.isMember', params)
 
     def is_unique_group(self, group_id, friends):
@@ -92,17 +81,14 @@ class VKInterface:
         end_pos = min(len(friends), max_friend)
         while True:
             str_friend = list2str(friends, start_pos, end_pos)
-            members = self.get_members_of_group(group_id, str_friend)
+            members = self.check_members_of_group(group_id, str_friend)
             if self.error:
                 print('Ошибка при получение состава группы: {}. Group_id = {}. Friends = {}'.format(self.error_msg, group_id, str_friend))
                 result = None
                 break
             for member in members:
                 if member['member']:
-                    result = False
-                    break
-            if not result:
-                break
+                    return False
             start_pos = end_pos + 1
             if start_pos > len(friends):
                 break
@@ -111,34 +97,40 @@ class VKInterface:
         return result
 
 
-vk_interface = VKInterface(vk_login.VK_ID, vk_login.VK_TOKEN)
+def list2str(arr, start_pos=0, end_pos=0):
+    sp = start_pos if start_pos else 1
+    ep = end_pos if end_pos else len(arr)
+    return ','.join(str(elem) for elem in arr[sp-1:ep])
 
-friends_list = vk_interface.get_friends_list()
-if vk_interface.error:
-    print('Ошибка при получении списка друзей для пользователя с ID {}'.format(vk_interface.user_id))
-    sys.exit()
 
-groups_list = vk_interface.get_groups_list()
-if vk_interface.error:
-    print('Ошибка при получении списка групп для пользователя с ID {}'.format(vk_interface.user_id))
-    sys.exit()
+def main():
 
-print('Друзья пользователя: {} шт., {}'.format(len(friends_list), friends_list))
-print('Группы пользователя: {} шт., {}'.format(len(groups_list), groups_list))
+    vk_interface = VKInterface(vk_login.VK_ID, vk_login.VK_TOKEN)
 
-my_groups = []
-for group in groups_list:
-    uniq = vk_interface.is_unique_group(group, friends_list)
-    if uniq:
-        group_info = vk_interface.get_groups_details(group)
-        if vk_interface.error:
-            print('Ошибка при получении сведений по группе {}. Group_id = {}'.format(vk_interface.error_msg, group))
-        else:
-            my_groups.append(dict(name=group_info[0]['name'], gid=group_info[0]['gid'],
-                                  members_count=group_info[0]['members_count']))
-    # break
+    friends_list = vk_interface.get_friends_list()
+    if vk_interface.error:
+        print('Ошибка при получении списка друзей для пользователя с ID {}'.format(vk_interface.user_id))
+        sys.exit()
 
-with open('groups.json', 'w') as jfile:
-    json.dump(my_groups, jfile)
-    sys.stderr.write("\r")
-    print('Записан файл: {}'.format(jfile.name))
+    groups_list = vk_interface.get_groups_list()
+    if vk_interface.error:
+        print('Ошибка при получении списка групп для пользователя с ID {}'.format(vk_interface.user_id))
+        sys.exit()
+
+    print('Друзья пользователя: {} шт., {}'.format(len(friends_list), friends_list))
+    print('Группы пользователя: {} шт., {}'.format(len(groups_list)-1, groups_list[1:]))
+
+    my_groups = []
+    for group in groups_list[1:]:
+        if vk_interface.is_unique_group(group['gid'], friends_list):
+            my_groups.append(dict(name=group['name'], gid=group['gid'],
+                                  members_count=group['members_count']))
+
+    with open('groups.json', 'w') as jfile:
+        json.dump(my_groups, jfile)
+        # sys.stderr.write("\r")
+        print('Записан файл: {}'.format(jfile.name))
+
+
+if __name__ == '__main__':
+    main()
