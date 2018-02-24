@@ -4,6 +4,9 @@ import requests
 import json
 import vk_login
 
+TOO_MANY_REQUESTS = 6
+MAX_GROUP_SIZE = 100
+
 
 class VKInterface:
 
@@ -19,6 +22,7 @@ class VKInterface:
         result = []
 
         request_params = {
+            'v': '5.73',
             'access_token': self.access_token,
             'user_id': self.user_id}
         if params:
@@ -37,7 +41,7 @@ class VKInterface:
                 if response_json.get('error'):
                     self.error = True
                     self.error_msg = response_json['error']['error_msg']
-                    too_many_requests = (int(response_json['error']['error_code']) == 6)
+                    too_many_requests = int(response_json['error']['error_code']) == TOO_MANY_REQUESTS
                 else:
                     result = response_json['response']
             else:
@@ -76,11 +80,10 @@ class VKInterface:
     def is_unique_group(self, group_id, friends):
 
         result = True
-        max_friend = 100
-        start_pos = 1
-        end_pos = min(len(friends), max_friend)
+        start_pos = 0
+        end_pos = MAX_GROUP_SIZE
         while True:
-            str_friend = list2str(friends, start_pos, end_pos)
+            str_friend = ','.join(str(elem) for elem in friends[start_pos:end_pos])
             members = self.check_members_of_group(group_id, str_friend)
             if self.error:
                 print('Ошибка при получение состава группы: {}. Group_id = {}. Friends = {}'.format(self.error_msg, group_id, str_friend))
@@ -89,18 +92,12 @@ class VKInterface:
             for member in members:
                 if member['member']:
                     return False
-            start_pos = end_pos + 1
-            if start_pos > len(friends):
+            start_pos += MAX_GROUP_SIZE
+            if start_pos > len(friends) - 1:
                 break
-            end_pos = min(len(friends), end_pos + max_friend)
+            end_pos += MAX_GROUP_SIZE
 
         return result
-
-
-def list2str(arr, start_pos=0, end_pos=0):
-    sp = start_pos if start_pos else 1
-    ep = end_pos if end_pos else len(arr)
-    return ','.join(str(elem) for elem in arr[sp-1:ep])
 
 
 def main():
@@ -117,18 +114,20 @@ def main():
         print('Ошибка при получении списка групп для пользователя с ID {}'.format(vk_interface.user_id))
         sys.exit()
 
+    friends_list = friends_list['items']
+    groups_list = groups_list['items']
+
     print('Друзья пользователя: {} шт., {}'.format(len(friends_list), friends_list))
-    print('Группы пользователя: {} шт., {}'.format(len(groups_list)-1, groups_list[1:]))
+    print('Группы пользователя: {} шт., {}'.format(len(groups_list), groups_list))
 
     my_groups = []
-    for group in groups_list[1:]:
-        if vk_interface.is_unique_group(group['gid'], friends_list):
-            my_groups.append(dict(name=group['name'], gid=group['gid'],
+    for group in groups_list:
+        if vk_interface.is_unique_group(group['id'], friends_list):
+            my_groups.append(dict(name=group['name'], gid=group['id'],
                                   members_count=group['members_count']))
 
     with open('groups.json', 'w') as jfile:
         json.dump(my_groups, jfile)
-        # sys.stderr.write("\r")
         print('Записан файл: {}'.format(jfile.name))
 
 
