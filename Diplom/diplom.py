@@ -48,15 +48,13 @@ class VKInterface:
                 self.error = True
                 self.error_msg = response.content
 
-            if too_many_requests:
-                # Ждем секунду и в это время выводим мигающую точку
-                for i in range(5):
-                    sys.stderr.write('\r*')
-                    time.sleep(0.1)
-                    sys.stderr.write('\r')
-                    time.sleep(0.1)
-            else:
+            if not too_many_requests:
                 break
+
+            # Делаем задержку в 0.2 с. для вывода мигающей точки
+            sys.stderr.write('\r*')
+            time.sleep(0.2)
+            sys.stderr.write('\r')
 
         return result
 
